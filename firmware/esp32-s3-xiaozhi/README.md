@@ -41,9 +41,3 @@ ESP32-S3 berkomunikasi dengan STB via:
 2. **HTTP `/stream_pcm`** — minta URL audio dari `stream_server.py`
 3. **HTTP `/play`** — stream audio MP3 dari YouTube
 
----
-
-## 📄 Catatan
-
-File firmware tidak disertakan di repo ini karena merupakan modifikasi dari project pihak ketiga.
-Silakan clone dari repo original lalu terapkan modifikasi sesuai kebutuhan.
