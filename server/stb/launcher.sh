@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
 
-ANGGIRA="$HOME/anggira/anggira.py"
-DASH="$HOME/anggira/dashboard.py"
-MUSIC="$HOME/anggira/stream_server.py"
-BOT="$HOME/anggira/bot.py"
+BASE="$HOME/anggira"
+
+ANGGIRA="$BASE/anggira.py"
+SERVICES="$BASE/services.py"
+DASH="$BASE/dashboard.py"
+MUSIC="$BASE/stream_server.py"
+BOT="$BASE/bot.py"
 
 LOG=$HOME/system.log
 
 echo "$(date) SYSTEM START" >> $LOG
+
+# ✅ cek services.py wajib ada
+if [ ! -f "$SERVICES" ]; then
+    echo "$(date) ERROR: services.py tidak ditemukan! Sistem tidak bisa jalan." >> $LOG
+    exit 1
+fi
 
 start() {
     NAME=$1
