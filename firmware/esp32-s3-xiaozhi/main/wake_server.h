@@ -4,6 +4,8 @@
 //    GET/POST /wake        — bangunkan Xiaozhi
 //    POST     /say         — kirim teks perintah ke Xiaozhi AI
 //    GET      /status      — cek status ESP32
+//    GET      /response    — ambil respons terakhir Xiaozhi AI (tts)
+//    GET      /stt         — ambil teks ucapan user terakhir (stt)
 // ============================================================
 
 #pragma once
@@ -13,6 +15,7 @@
 #include <cJSON.h>
 #include <functional>
 #include <string>
+#include <mutex>
 
 #define WAKE_SERVER_TAG "WakeServer"
 #define WAKE_SERVER_PORT 8080
@@ -33,6 +36,21 @@ public:
 
     void SetSayCallback(std::function<void(const std::string&)> cb) {
         say_callback_ = cb;
+    }
+
+    // Dipanggil dari application.cc ketika Xiaozhi selesai bicara (tts sentence_start)
+    void SetLastResponse(const std::string& text) {
+        std::lock_guard<std::mutex> lock(response_mutex_);
+        last_response_ = text;
+        response_consumed_ = false;
+        ESP_LOGI(WAKE_SERVER_TAG, "AI response stored: %s", text.c_str());
+    }
+
+    // Dipanggil dari application.cc ketika STT selesai (ucapan user)
+    void SetLastStt(const std::string& text) {
+        std::lock_guard<std::mutex> lock(response_mutex_);
+        last_stt_ = text;
+        ESP_LOGI(WAKE_SERVER_TAG, "STT stored: %s", text.c_str());
     }
 
     bool Start() {
@@ -86,11 +104,31 @@ public:
         };
         httpd_register_uri_handler(server_, &status_get);
 
+        // GET /response — ambil respons Xiaozhi AI terakhir
+        httpd_uri_t response_get = {
+            .uri      = "/response",
+            .method   = HTTP_GET,
+            .handler  = ResponseHandler,
+            .user_ctx = this
+        };
+        httpd_register_uri_handler(server_, &response_get);
+
+        // GET /stt — ambil teks ucapan user terakhir
+        httpd_uri_t stt_get = {
+            .uri      = "/stt",
+            .method   = HTTP_GET,
+            .handler  = SttHandler,
+            .user_ctx = this
+        };
+        httpd_register_uri_handler(server_, &stt_get);
+
         ESP_LOGI(WAKE_SERVER_TAG, "HTTP Wake Server started on port %d", WAKE_SERVER_PORT);
         ESP_LOGI(WAKE_SERVER_TAG, "Endpoints:");
         ESP_LOGI(WAKE_SERVER_TAG, "  GET/POST http://192.168.1.10:%d/wake", WAKE_SERVER_PORT);
         ESP_LOGI(WAKE_SERVER_TAG, "  POST     http://192.168.1.10:%d/say", WAKE_SERVER_PORT);
         ESP_LOGI(WAKE_SERVER_TAG, "  GET      http://192.168.1.10:%d/status", WAKE_SERVER_PORT);
+        ESP_LOGI(WAKE_SERVER_TAG, "  GET      http://192.168.1.10:%d/response", WAKE_SERVER_PORT);
+        ESP_LOGI(WAKE_SERVER_TAG, "  GET      http://192.168.1.10:%d/stt", WAKE_SERVER_PORT);
         return true;
     }
 
@@ -108,6 +146,11 @@ private:
     httpd_handle_t server_ = nullptr;
     std::function<void(const std::string&)> wake_callback_;
     std::function<void(const std::string&)> say_callback_;
+
+    std::mutex  response_mutex_;
+    std::string last_response_;     // teks respons Xiaozhi terakhir
+    std::string last_stt_;          // teks ucapan user terakhir
+    bool        response_consumed_ = true;  // sudah dibaca bot atau belum
 
     static esp_err_t SendJson(httpd_req_t *req, const char* json) {
         httpd_resp_set_type(req, "application/json");
@@ -179,6 +222,50 @@ private:
         return SendJson(req,
             "{\"status\":\"ok\",\"device\":\"xiaozhi-esp32\","
             "\"mac\":\"3c:dc:75:6b:f9:ec\","
-            "\"endpoints\":[\"/wake\",\"/say\",\"/status\"]}");
+            "\"endpoints\":[\"/wake\",\"/say\",\"/status\",\"/response\",\"/stt\"]}");
+    }
+
+    // GET /response — kembalikan respons AI terakhir, tandai sudah dibaca
+    static esp_err_t ResponseHandler(httpd_req_t *req) {
+        auto* self = (WakeServer*)req->user_ctx;
+        std::lock_guard<std::mutex> lock(self->response_mutex_);
+
+        auto* root = cJSON_CreateObject();
+        if (!self->last_response_.empty() && !self->response_consumed_) {
+            cJSON_AddStringToObject(root, "status", "ok");
+            cJSON_AddStringToObject(root, "text", self->last_response_.c_str());
+            cJSON_AddTrueToObject(root, "new");
+            self->response_consumed_ = true;
+        } else if (!self->last_response_.empty()) {
+            cJSON_AddStringToObject(root, "status", "ok");
+            cJSON_AddStringToObject(root, "text", self->last_response_.c_str());
+            cJSON_AddFalseToObject(root, "new");
+        } else {
+            cJSON_AddStringToObject(root, "status", "empty");
+            cJSON_AddStringToObject(root, "text", "");
+            cJSON_AddFalseToObject(root, "new");
+        }
+
+        char* json_str = cJSON_PrintUnformatted(root);
+        cJSON_Delete(root);
+        esp_err_t ret = SendJson(req, json_str);
+        free(json_str);
+        return ret;
+    }
+
+    // GET /stt — kembalikan teks ucapan user terakhir
+    static esp_err_t SttHandler(httpd_req_t *req) {
+        auto* self = (WakeServer*)req->user_ctx;
+        std::lock_guard<std::mutex> lock(self->response_mutex_);
+
+        auto* root = cJSON_CreateObject();
+        cJSON_AddStringToObject(root, "status", "ok");
+        cJSON_AddStringToObject(root, "text", self->last_stt_.c_str());
+
+        char* json_str = cJSON_PrintUnformatted(root);
+        cJSON_Delete(root);
+        esp_err_t ret = SendJson(req, json_str);
+        free(json_str);
+        return ret;
     }
 };
