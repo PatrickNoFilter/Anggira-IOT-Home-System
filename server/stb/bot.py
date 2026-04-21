@@ -1,4 +1,3 @@
-import asyncio
 """
 Xiaozhi Wake Bot — Telegram Bot untuk STB Android (Termux)
 ===========================================================
@@ -14,13 +13,15 @@ Dependensi:
 Env variables (.bashrc):
     export TELEGRAM_BOT_TOKEN="token_xiaozhi_bot"
     export ESP32_IP="192.168.1.222"
-    export ESP32_PORT="80"
+    export ESP32_PORT="8080"           ← pakai 8080 sesuai wake_server.h
     export TELEGRAM_ALLOWED_USER_ID="8407417185"
 """
 
+import asyncio
 import json
 import logging
 import os
+import time
 import urllib.request
 import urllib.error
 
@@ -32,16 +33,14 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, Comma
 # ─────────────────────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', '')
 
-# IP & Port ESP32 dari env, fallback ke default
 ESP32_IP   = os.environ.get('ESP32_IP', '192.168.1.222')
-ESP32_PORT = int(os.environ.get('ESP32_PORT', '80'))
+ESP32_PORT = int(os.environ.get('ESP32_PORT', '8080'))   # wake_server.h pakai 8080
 
-WAKE_URL   = f"http://{ESP32_IP}:{ESP32_PORT}/wake"
-STATUS_URL = f"http://{ESP32_IP}:{ESP32_PORT}/status"
+WAKE_URL     = f"http://{ESP32_IP}:{ESP32_PORT}/wake"
+STATUS_URL   = f"http://{ESP32_IP}:{ESP32_PORT}/status"
 SAY_URL      = f"http://{ESP32_IP}:{ESP32_PORT}/say"
 RESPONSE_URL = f"http://{ESP32_IP}:{ESP32_PORT}/response"
-STT_URL      = f"http://{ESP32_IP}:{ESP32_PORT}/stt"
-WAKE_WORD  = os.environ.get('WAKE_WORD', 'Hi ESP')
+WAKE_WORD    = os.environ.get('WAKE_WORD', 'Hi ESP')
 
 # Whitelist dari env — format: "123456789,987654321"
 _allowed_str = os.environ.get('TELEGRAM_ALLOWED_USER_ID', '')
@@ -81,6 +80,7 @@ def send_wake_http() -> bool:
         logger.error("Error kirim wake: %s", e)
         return False
 
+
 def send_say_http(text: str) -> bool:
     """Kirim teks perintah ke Xiaozhi AI via /say endpoint."""
     try:
@@ -103,22 +103,41 @@ def send_say_http(text: str) -> bool:
         return False
 
 
+def poll_response(timeout: int = 25, interval: float = 1.0) -> str:
+    """
+    Poll /response ESP32 sampai ada respons baru atau timeout.
 
-
-def poll_response(timeout: int = 8, interval: float = 0.5) -> str:
-    """Poll /response ESP32 sampai ada respons baru atau timeout."""
-    import time
+    Status yang dikembalikan ESP32:
+      pending  — AI masih memproses, lanjut poll
+      ok+new   — respons baru tersedia, ambil dan return
+      ok       — respons lama (sudah dibaca), lanjut poll
+      empty    — belum ada sama sekali, lanjut poll
+    """
     deadline = time.time() + timeout
+    waited = 0
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(RESPONSE_URL, timeout=3) as r:
+            with urllib.request.urlopen(RESPONSE_URL, timeout=5) as r:
                 data = json.loads(r.read().decode())
-                if data.get("new") and data.get("text"):
-                    return data["text"]
+                status = data.get("status", "")
+                is_new = data.get("new", False)
+                text   = data.get("text", "")
+
+                logger.info("poll[%ds] status=%s new=%s text=%s", waited, status, is_new, text[:40] if text else "")
+
+                if is_new and text:
+                    return text   # ✅ Dapat respons baru
+
+                # Masih pending atau belum ada — tunggu lagi
         except Exception as e:
             logger.warning("poll_response error: %s", e)
+
         time.sleep(interval)
+        waited += int(interval)
+
+    logger.warning("poll_response timeout setelah %ds", timeout)
     return ""
+
 
 def check_esp32_status() -> str:
     """Cek status ESP32."""
@@ -210,29 +229,37 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"ESP32 tidak merespons di `{WAKE_URL}`\n\n"
                 "Pastikan:\n"
                 "• ESP32 menyala dan terhubung WiFi\n"
-                "• Firmware sudah include `wake_server.h`",
+                "• Firmware sudah include `wake_server.h`\n"
+                f"• Port ESP32 di env sudah `{ESP32_PORT}`",
                 parse_mode="Markdown"
             )
     else:
-        await update.message.reply_text(f"⏳ Mengirim ke Xiaozhi: _{text}_...", parse_mode="Markdown")
+        # Kirim perintah ke Xiaozhi dan tunggu responnya
+        thinking_msg = await update.message.reply_text(
+            f"⏳ Mengirim ke Xiaozhi: _{text}_...", parse_mode="Markdown"
+        )
         success = send_say_http(text)
-        if success:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, poll_response, 10)
-            if response:
-                await update.message.reply_text(
-                    f"🤖 *Xiaozhi:*\n{response}",
-                    parse_mode="Markdown"
-                )
-            else:
-                await update.message.reply_text(
-                    f"✅ Perintah terkirim!\n💬 `{text}`\n_(tidak ada respons teks)_",
-                    parse_mode="Markdown"
-                )
-        else:
-            await update.message.reply_text(
+        if not success:
+            await thinking_msg.edit_text(
                 "❌ Gagal mengirim perintah.\n"
                 "Coba ketik `Hi ESP` dulu untuk membangunkan Xiaozhi.",
+                parse_mode="Markdown"
+            )
+            return
+
+        # Tunggu jawaban Xiaozhi via polling /response
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(None, poll_response)
+
+        if response:
+            await thinking_msg.edit_text(
+                f"🤖 *Xiaozhi:*\n{response}",
+                parse_mode="Markdown"
+            )
+        else:
+            await thinking_msg.edit_text(
+                f"✅ Perintah terkirim: `{text}`\n"
+                "_(Xiaozhi tidak mengirim respons teks — mungkin sedang berbicara)_",
                 parse_mode="Markdown"
             )
 
@@ -250,6 +277,7 @@ def main():
     logger.info("  ESP32 : http://%s:%d", ESP32_IP, ESP32_PORT)
     logger.info("  Wake  : %s", WAKE_URL)
     logger.info("  Say   : %s", SAY_URL)
+    logger.info("  Response: %s", RESPONSE_URL)
     logger.info("  Allowed IDs: %s", ALLOWED_CHAT_IDS if ALLOWED_CHAT_IDS else "semua")
     logger.info("=" * 50)
 
