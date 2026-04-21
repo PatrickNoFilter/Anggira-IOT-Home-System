@@ -32,8 +32,16 @@ Kamu punya 2 cara memutar lagu:
 - play_song → putar lagu lewat speaker ESP32 (speaker kecil di perangkat ini)
 - play_song_stb → putar lagu lewat speaker STB/TV di ruangan (lebih keras, kualitas lebih baik)
 
-Gunakan play_song_stb jika user menyebut: STB, TV, ruangan, speaker besar, speaker TV, di sana.
-Gunakan play_song jika user tidak menyebut tempat, atau menyebut: sini, di sini, speaker ini.
+Kamu juga bisa memutar internet radio:
+- play_radio → putar radio lewat speaker ESP32 (speaker kecil)
+- play_radio_stb → putar radio lewat speaker STB/TV di ruangan
+- stop_radio → hentikan radio di ESP32
+- stop_radio_stb → hentikan radio di STB/TV
+- list_radio → tampilkan daftar stasiun radio yang tersedia
+
+Gunakan play_radio_stb / stop_radio_stb jika user menyebut: STB, TV, ruangan, speaker besar, speaker TV, di sana.
+Gunakan play_radio / stop_radio jika user tidak menyebut tempat, atau menyebut: sini, di sini, speaker ini.
+Gunakan play_song_stb jika user minta lagu tertentu di STB/TV.
 Gunakan stop_song_stb jika user minta stop/hentikan musik di STB/TV.
 
 Jawab singkat, jelas, bahasa Indonesia natural."""
@@ -108,6 +116,113 @@ async def play_song_stb(song, artist=""):
 async def stop_song_stb():
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(executor, stop_song_stb_http)
+
+# ================= INTERNET RADIO =================
+# Daftar stasiun radio — tambah/ubah sesuai kebutuhan
+RADIO_STATIONS = {
+    # === Jakarta ===
+    "prambors":     {"name": "Prambors FM Jakarta",    "url": "https://s1.cloudmu.id/listen/prambors/stream"},
+    "hardrock":     {"name": "Hard Rock FM Jakarta",   "url": "https://stream.zeno.fm/btdooo7j1ydvv"},
+    "delta":        {"name": "Delta FM Jakarta",       "url": "https://s1.cloudmu.id/listen/delta_fm/stream"},
+    "traxfm":       {"name": "Trax FM Jakarta",        "url": "https://stream.radiojar.com/rrqf78p3bnzuv"},
+    "female":       {"name": "Female Radio Jakarta",   "url": "http://103.24.105.90:9300/fjkt"},
+    "rripro1jkt":   {"name": "RRI Pro 1 Jakarta",      "url": "https://stream-node1.rri.co.id/streaming/25/9025/rrijakartapro1.mp3"},
+    "rripro2jkt":   {"name": "RRI Pro 2 Jakarta",      "url": "https://stream-node1.rri.co.id/streaming/25/9025/rrijakartapro2.mp3"},
+    # === Semarang ===
+    "rripro1smg":   {"name": "RRI Pro 1 Semarang",     "url": "https://stream-node0.rri.co.id/streaming/16/9016/rrisemarangpro1.mp3"},
+    "rripro2smg":   {"name": "RRI Pro 2 Semarang",     "url": "https://stream-node0.rri.co.id/streaming/16/9016/rrisemarangpro2.mp3"},
+    "idolafm":      {"name": "Idola FM Semarang",      "url": "https://stream.cradio.co.id/idolafm"},
+    "gajahmada":    {"name": "Gajah Mada FM Semarang", "url": "https://server.radioimeldafm.co.id:8040/gajahmadafm"},
+    "swarasmg":     {"name": "Swara Semarang FM",      "url": "https://server.radioimeldafm.co.id/radio/8010/swarasemarang"},
+    "upradio":      {"name": "UP Radio Semarang",      "url": "https://stream.tujuhcahaya.com/listen/radio_upradio_semarang/radio.mp3"},
+    # === Salatiga ===
+    "salatiga":     {"name": "Radio Salatiga",         "url": "https://icecast.salatiga.go.id:8443/stream.ogg"},
+    # === Internasional ===
+    "bbc":          {"name": "BBC World Service",      "url": "https://stream.live.vc.bbcmedia.co.uk/bbc_world_service"},
+    "jazz24":       {"name": "Jazz24",                 "url": "https://live.wostreaming.net/direct/ppm-jazz24aac-ibc1"},
+}
+
+def _get_radio_station(name_or_key):
+    """Cari stasiun radio berdasarkan key atau nama (case-insensitive)."""
+    key = name_or_key.lower().strip()
+    # Cek key langsung
+    if key in RADIO_STATIONS:
+        return RADIO_STATIONS[key]
+    # Cek partial match pada nama
+    for k, v in RADIO_STATIONS.items():
+        if key in v["name"].lower() or key in k:
+            return v
+    return None
+
+def list_radio_stations():
+    """Kembalikan daftar stasiun radio yang tersedia."""
+    lines = ["📻 Stasiun radio tersedia:"]
+    for key, info in RADIO_STATIONS.items():
+        lines.append(f"• {info['name']} (kata kunci: {key})")
+    return "\n".join(lines)
+
+def play_radio_http(station_name):
+    """Putar internet radio via speaker ESP32 (stream PCM ke ESP32)."""
+    try:
+        station = _get_radio_station(station_name)
+        if not station:
+            available = ", ".join(RADIO_STATIONS.keys())
+            return f"❌ Stasiun '{station_name}' tidak ditemukan. Tersedia: {available}"
+        url = f"{MUSIC_SERVER}/stream_radio?url={urllib.parse.quote(station['url'])}&name={urllib.parse.quote(station['name'])}"
+        result = urllib.request.urlopen(url, timeout=15).read().decode()
+        return f"📻 Memutar {station['name']} di speaker ESP32"
+    except Exception as e:
+        return f"Radio error: {e}"
+
+def stop_radio_http():
+    """Hentikan radio di ESP32 (sama endpoint dengan stop lagu)."""
+    try:
+        url = f"{MUSIC_SERVER}/stop_stream"
+        result = urllib.request.urlopen(url, timeout=5).read().decode()
+        return "⏹ Radio di ESP32 dihentikan"
+    except Exception as e:
+        return f"Stop radio error: {e}"
+
+def play_radio_stb_http(station_name):
+    """Putar internet radio langsung di STB/TV."""
+    try:
+        station = _get_radio_station(station_name)
+        if not station:
+            available = ", ".join(RADIO_STATIONS.keys())
+            return f"❌ Stasiun '{station_name}' tidak ditemukan. Tersedia: {available}"
+        url = f"{MUSIC_SERVER}/play_radio?url={urllib.parse.quote(station['url'])}&name={urllib.parse.quote(station['name'])}"
+        result = urllib.request.urlopen(url, timeout=15).read().decode()
+        return f"📻 Memutar {station['name']} di speaker STB/TV"
+    except Exception as e:
+        return f"Radio STB error: {e}"
+
+def stop_radio_stb_http():
+    """Hentikan radio di STB/TV."""
+    try:
+        url = f"{MUSIC_SERVER}/stop_radio"
+        result = urllib.request.urlopen(url, timeout=5).read().decode()
+        return "⏹ Radio di STB/TV dihentikan"
+    except Exception as e:
+        return f"Stop radio STB error: {e}"
+
+async def play_radio(station_name):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, play_radio_http, station_name)
+
+async def stop_radio():
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, stop_radio_http)
+
+async def play_radio_stb(station_name):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, play_radio_stb_http, station_name)
+
+async def stop_radio_stb():
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, stop_radio_stb_http)
+
+async def get_radio_list():
+    return list_radio_stations()
 
 # ================= ESP32 =================
 def esp32_get(path):
@@ -547,6 +662,20 @@ async def handle_telegram_stb():
                         telegram_send(TELEGRAM_STB_TOKEN, chat_id, stop_result)
                         tts_stb("Musik dihentikan.")
                         continue
+                    if text in ["/stopradio", "/stopr"]:
+                        stop_result = stop_radio_stb_http()
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, stop_result)
+                        tts_stb("Radio dihentikan.")
+                        continue
+                    if text.startswith("/radio "):
+                        station = text[7:].strip()
+                        radio_result = play_radio_stb_http(station)
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, radio_result)
+                        tts_stb(f"Memutar radio {station}")
+                        continue
+                    if text == "/radiolist":
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, list_radio_stations())
+                        continue
                     # Kirim typing indicator dulu
                     await loop.run_in_executor(
                         executor, telegram_typing, TELEGRAM_STB_TOKEN, chat_id
@@ -624,6 +753,58 @@ async def handle_mcp():
                             {
                                 "name": "stop_song_stb",
                                 "description": "Hentikan musik yang sedang diputar di speaker STB/TV",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {}
+                                }
+                            },
+                            {
+                                "name": "play_radio",
+                                "description": "Putar internet radio lewat speaker ESP32. Gunakan jika user tidak menyebut STB/TV.",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "station": {
+                                            "type": "string",
+                                            "description": "Nama atau kata kunci stasiun radio, contoh: prambors, hardrock, gen, bbc, jazz24"
+                                        }
+                                    },
+                                    "required": ["station"]
+                                }
+                            },
+                            {
+                                "name": "play_radio_stb",
+                                "description": "Putar internet radio di speaker STB/TV ruangan. Gunakan jika user menyebut STB, TV, atau speaker ruangan.",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "station": {
+                                            "type": "string",
+                                            "description": "Nama atau kata kunci stasiun radio, contoh: prambors, hardrock, gen, bbc, jazz24"
+                                        }
+                                    },
+                                    "required": ["station"]
+                                }
+                            },
+                            {
+                                "name": "stop_radio",
+                                "description": "Hentikan radio yang sedang diputar di speaker ESP32",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {}
+                                }
+                            },
+                            {
+                                "name": "stop_radio_stb",
+                                "description": "Hentikan radio yang sedang diputar di speaker STB/TV",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {}
+                                }
+                            },
+                            {
+                                "name": "list_radio",
+                                "description": "Tampilkan daftar semua stasiun internet radio yang tersedia",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {}
@@ -713,6 +894,18 @@ async def handle_mcp():
                     )
                 elif tool == "stop_song_stb":
                     result = await stop_song_stb()
+                elif tool == "play_radio":
+                    args = data["params"].get("arguments", {})
+                    result = await play_radio(args.get("station", ""))
+                elif tool == "play_radio_stb":
+                    args = data["params"].get("arguments", {})
+                    result = await play_radio_stb(args.get("station", ""))
+                elif tool == "stop_radio":
+                    result = await stop_radio()
+                elif tool == "stop_radio_stb":
+                    result = await stop_radio_stb()
+                elif tool == "list_radio":
+                    result = await get_radio_list()
                 elif tool == "get_calendar":
                     args = data["params"].get("arguments", {})
                     days = int(args.get("days_ahead", 7))
@@ -741,7 +934,7 @@ async def handle_mcp():
 
 # ================= MAIN =================
 async def main():
-    print("Anggira FULL + MUSIC + SENSOR + JADWAL + GOOGLE CALENDAR + TELEGRAM STB")
+    print("Anggira FULL + MUSIC + RADIO + SENSOR + JADWAL + GOOGLE CALENDAR + TELEGRAM STB")
     await asyncio.gather(
         handle_mcp(),
         handle_telegram_stb()
