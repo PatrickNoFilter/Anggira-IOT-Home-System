@@ -15,6 +15,7 @@
 #include <cJSON.h>
 #include <driver/gpio.h>
 #include <arpa/inet.h>
+#include <utility>
 
 #define TAG "Application"
 
@@ -995,18 +996,84 @@ void Application::PlaySound(const std::string_view &sound)
 
 void Application::SendTextToAI(const std::string& text)
 {
-    ESP_LOGI(TAG, "SendTextToAI: %s", text.c_str());
+    ESP_LOGI(TAG, "SendTextToAI: %s (state=%d)", text.c_str(), device_state_);
 
-    if (device_state_ != kDeviceStateIdle) {
-        ESP_LOGW(TAG, "SendTextToAI: device not idle (state=%d), skipping", device_state_);
+    // Jika sedang speaking → abort dulu, lalu retry
+    if (device_state_ == kDeviceStateSpeaking) {
+        ESP_LOGI(TAG, "SendTextToAI: aborting current speech, will retry...");
+        AbortSpeaking(kAbortReasonNone);
+        // Retry setelah abort selesai (polling state via timer)
+        Schedule([this, text]() {
+            SendTextToAIWithRetry(text, 0);
+        });
         return;
     }
 
+    // Jika sedang listening → tutup channel, lalu retry
+    if (device_state_ == kDeviceStateListening) {
+        ESP_LOGI(TAG, "SendTextToAI: closing audio channel (listening), will retry...");
+        protocol_->CloseAudioChannel();
+        Schedule([this, text]() {
+            SendTextToAIWithRetry(text, 0);
+        });
+        return;
+    }
+
+    // Jika tidak idle (connecting, upgrading, dll) → retry saja
+    if (device_state_ != kDeviceStateIdle) {
+        ESP_LOGW(TAG, "SendTextToAI: not idle (state=%d), retrying...", device_state_);
+        Schedule([this, text]() {
+            SendTextToAIWithRetry(text, 0);
+        });
+        return;
+    }
+
+    // State idle — langsung kirim
+    SendTextToAIImmediate(text);
+}
+
+void Application::SendTextToAIWithRetry(const std::string& text, int attempt)
+{
+    const int MAX_ATTEMPTS = 20;   // 20 × 100ms = 2 detik timeout
+    const int RETRY_MS     = 100;
+
+    if (attempt >= MAX_ATTEMPTS) {
+        ESP_LOGE(TAG, "SendTextToAIWithRetry: timeout waiting for idle");
+        return;
+    }
+
+    if (device_state_ != kDeviceStateIdle) {
+        // Jadwalkan ulang setelah RETRY_MS
+        esp_timer_handle_t timer;
+        esp_timer_create_args_t args = {
+            .callback = [](void* arg) {
+                auto* pair = static_cast<std::pair<Application*, std::pair<std::string, int>>*>(arg);
+                pair->first->Schedule([pair]() {
+                    pair->first->SendTextToAIWithRetry(pair->second.first, pair->second.second);
+                    delete pair;
+                });
+            },
+            .arg = new std::pair<Application*, std::pair<std::string, int>>(
+                this, std::make_pair(text, attempt + 1)
+            ),
+            .name = "say_retry"
+        };
+        esp_timer_create(&args, &timer);
+        esp_timer_start_once(timer, RETRY_MS * 1000);  // microseconds
+        return;
+    }
+
+    ESP_LOGI(TAG, "SendTextToAIWithRetry: idle after %d attempts, sending", attempt);
+    SendTextToAIImmediate(text);
+}
+
+void Application::SendTextToAIImmediate(const std::string& text)
+{
     // Buka audio channel jika belum terbuka
     if (!protocol_->IsAudioChannelOpened()) {
         SetDeviceState(kDeviceStateConnecting);
         if (!protocol_->OpenAudioChannel()) {
-            ESP_LOGE(TAG, "SendTextToAI: Failed to open audio channel");
+            ESP_LOGE(TAG, "SendTextToAIImmediate: Failed to open audio channel");
             SetDeviceState(kDeviceStateIdle);
             return;
         }
@@ -1021,5 +1088,5 @@ void Application::SendTextToAI(const std::string& text)
     // Kirim teks sebagai STT result — server AI akan langsung proses tanpa tunggu audio
     protocol_->SendWakeWordDetected(text);
 
-    ESP_LOGI(TAG, "SendTextToAI: sent, state=listening, waiting for TTS response");
+    ESP_LOGI(TAG, "SendTextToAIImmediate: sent, waiting for TTS response");
 }

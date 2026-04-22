@@ -57,6 +57,8 @@ public:
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
     void SendTextToAI(const std::string& text);
+    void SendTextToAIWithRetry(const std::string& text, int attempt);
+    void SendTextToAIImmediate(const std::string& text);
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     
