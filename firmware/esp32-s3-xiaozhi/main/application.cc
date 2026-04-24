@@ -1075,24 +1075,20 @@ void Application::SendTextToAIWithRetry(const std::string& text, int attempt)
 
 void Application::SendTextToAIImmediate(const std::string& text)
 {
-    // Buka audio channel jika belum terbuka
-    if (!protocol_->IsAudioChannelOpened()) {
-        SetDeviceState(kDeviceStateConnecting);
-        if (!protocol_->OpenAudioChannel()) {
-            ESP_LOGE(TAG, "SendTextToAIImmediate: Failed to open audio channel");
-            SetDeviceState(kDeviceStateIdle);
-            return;
-        }
+    // ✅ LANGSUNG KIRIM — TANPA cek state, tanpa wake, tanpa popup sound
+    // Tidak butuh buka audio channel — biar server kirim TTS aja
+    // Audio akan otomatis aktif pas TTS datang
+
+    // 🔧 HILANGKAN SEMUA pengecekan state dan buka channel
+    // 🔧 HILANGKAN bunyi P3_POPUP biar hening saat chime
+
+    // Set state idle, kirim langsung ke AI
+    SetDeviceState(kDeviceStateIdle);
+
+    // Kirim teks sebagai wake word detected — AI akan langsung proses
+    if (protocol_ && protocol_->IsConnected()) {
+        protocol_->SendWakeWordDetected(text);
     }
 
-    // Bunyi popup seperti wake word fisik agar codec audio aktif
-    audio_service_.PlaySound(Lang::Sounds::P3_POPUP);
-
-    // Set state listening agar TTS response bisa diputar
-    SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-
-    // Kirim teks sebagai STT result — server AI akan langsung proses tanpa tunggu audio
-    protocol_->SendWakeWordDetected(text);
-
-    ESP_LOGI(TAG, "SendTextToAIImmediate: sent, waiting for TTS response");
+    ESP_LOGI(TAG, "SendTextToAIImmediate: DIRECT SENT — %s", text.c_str());
 }
