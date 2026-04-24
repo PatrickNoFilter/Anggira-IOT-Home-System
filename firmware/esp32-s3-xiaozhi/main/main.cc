@@ -12,6 +12,10 @@
 
 extern "C" void app_main(void)
 {
+    // Set timezone to WIB (UTC+7) FIRST — before any timer or display initialization
+    setenv("TZ", "WIB-7", 1);
+    tzset();
+
     // Initialize the default event loop
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
