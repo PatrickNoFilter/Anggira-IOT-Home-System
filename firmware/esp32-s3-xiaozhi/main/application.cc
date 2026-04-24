@@ -16,6 +16,7 @@
 #include <driver/gpio.h>
 #include <arpa/inet.h>
 #include <utility>
+#include <time.h>
 
 #define TAG "Application"
 
@@ -561,6 +562,11 @@ void Application::Start()
         });
     });
     WakeServer::GetInstance().Start();
+
+    // Set timezone ke WIB (UTC+7) agar localtime_r akurat
+    setenv("TZ", Application::kTimezoneWib, 1);
+    tzset();
+    ESP_LOGI(TAG, "Timezone set to WIB (UTC+%d)", Application::kTimezoneWibOffsetHours);
 
     has_server_time_ = ota.HasServerTime();
     if (protocol_started)
