@@ -130,46 +130,43 @@ def send_say_http(text: str) -> bool:
 
 
 
-def poll_response(timeout: int = 30, interval: float = 0.8) -> str:
+async def poll_response(timeout: int = 20, interval: float = 0.8) -> str:
     """
-    Poll /response ESP32 dan kumpulkan SEMUA kalimat respons.
-
-    ESP32 menyimpan satu kalimat per TTS sentence_start. Fungsi ini
-    mengumpulkan semua kalimat selama masih ada new=true, baru return
-    setelah idle IDLE_AFTER detik tanpa kalimat baru.
+    Poll /response ESP32 secara async — tidak memblokir event loop.
+    Kumpulkan semua kalimat TTS hingga idle IDLE_AFTER detik tanpa kalimat baru.
     """
-    import time
-    IDLE_AFTER = 3.0   # detik tanpa respons baru → anggap selesai
+    import time as _time
+    IDLE_AFTER = 3.0
     collected  = []
-    last_new   = None  # waktu terakhir dapat kalimat baru
-    deadline   = time.time() + timeout
+    last_new   = None
+    deadline   = _time.monotonic() + timeout
+    loop       = asyncio.get_running_loop()
 
-    while time.time() < deadline:
+    while _time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(RESPONSE_URL, timeout=4) as r:
-                data = json.loads(r.read().decode())
+            # HTTP request di executor agar tidak block event loop
+            def _fetch():
+                with urllib.request.urlopen(RESPONSE_URL, timeout=4) as r:
+                    return json.loads(r.read().decode())
+
+            data = await loop.run_in_executor(None, _fetch)
 
             if data.get("new") and data.get("text"):
-                text = data["text"].strip()
-                if text and text not in collected:
-                    collected.append(text)
-                    last_new = time.time()
-                    logger.info("poll_response: dapat kalimat [%d]: %s", len(collected), text[:60])
-                # Terus poll — mungkin ada kalimat berikutnya
+                txt = data["text"].strip()
+                if txt and txt not in collected:
+                    collected.append(txt)
+                    last_new = _time.monotonic()
+                    logger.info("poll[%d]: %s", len(collected), txt[:60])
             else:
-                # Tidak ada kalimat baru
-                if collected and last_new and (time.time() - last_new) >= IDLE_AFTER:
-                    # Sudah idle cukup lama, semua kalimat sudah terkumpul
+                if collected and last_new and (_time.monotonic() - last_new) >= IDLE_AFTER:
                     break
 
         except Exception as e:
             logger.warning("poll_response error: %s", e)
 
-        time.sleep(interval)
+        await asyncio.sleep(interval)
 
-    if collected:
-        return " ".join(collected)
-    return ""
+    return " ".join(collected) if collected else ""
 
 def check_esp32_status() -> str:
     """Cek status ESP32."""
@@ -286,7 +283,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text.lower() in WAKE_TRIGGERS:
         await update.message.reply_text("⏳ Membangunkan Xiaozhi...")
-        success = send_wake_http()
+        loop = asyncio.get_running_loop()
+        success = await loop.run_in_executor(None, send_wake_http)
         if success:
             await update.message.reply_text(
                 "✅ *Xiaozhi dibangunkan!*\n"
@@ -305,10 +303,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     else:
         await update.message.reply_text(f"⏳ Mengirim ke Xiaozhi: _{text}_...", parse_mode="Markdown")
-        success = send_say_http(text)
+        loop = asyncio.get_running_loop()
+        success = await loop.run_in_executor(None, send_say_http, text)
         if success:
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, poll_response)
+            response = await poll_response()
             if response:
                 await update.message.reply_text(
                     f"🤖 *Xiaozhi:*\n{response}",
@@ -351,14 +349,10 @@ async def handle_chime():
                     text = cfg.get("chime_text", DEFAULT_CHIME["chime_text"])
                     logger_chime.info("Jam %02d:00 → '%s'", hour, text)
 
-                    loop = asyncio.get_event_loop()
-                    ok_wake = await loop.run_in_executor(None, send_wake_http)
-                    if ok_wake:
-                        await asyncio.sleep(2)
-                        ok_say = await loop.run_in_executor(None, send_say_http, text)
-                        logger_chime.info("Say %s", "OK ✓" if ok_say else "GAGAL ✗")
-                    else:
-                        logger_chime.warning("ESP32 tidak merespons wake, skip")
+                    # Langsung /say — firmware sudah handle abort+retry sendiri
+                    loop = asyncio.get_running_loop()
+                    ok_say = await loop.run_in_executor(None, send_say_http, text)
+                    logger_chime.info("Say %s", "OK ✓" if ok_say else "GAGAL ✗")
                 else:
                     reason = "disabled" if not cfg.get("chime_enabled") else f"jam {hour} tidak aktif"
                     logger_chime.debug("Jam %02d:00 — skip (%s)", hour, reason)
