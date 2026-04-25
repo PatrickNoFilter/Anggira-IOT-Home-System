@@ -192,10 +192,8 @@ bool Ota::CheckVersion() {
             struct timeval tv;
             double ts = timestamp->valuedouble;
             
-            // 如果有时区偏移，计算本地时间
-            if (cJSON_IsNumber(timezone_offset)) {
-                ts += (timezone_offset->valueint * 60 * 1000); // 转换分钟为毫秒
-            }
+            // Timestamp is expected to be UTC epoch milliseconds.
+            // Do NOT apply timezone_offset to epoch value; timezone is handled by TZ/localtime.
             
             tv.tv_sec = (time_t)(ts / 1000);  // 转换毫秒为秒
             tv.tv_usec = (suseconds_t)((long long)ts % 1000) * 1000;  // 剩余的毫秒转换为微秒

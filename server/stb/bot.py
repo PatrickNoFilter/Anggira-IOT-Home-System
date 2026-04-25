@@ -21,8 +21,10 @@ Env variables (.bashrc):
 import json
 import logging
 import os
+import time
 import urllib.request
 import urllib.error
+from datetime import datetime
 
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
@@ -43,6 +45,28 @@ RESPONSE_URL = f"http://{ESP32_IP}:{ESP32_PORT}/response"
 STT_URL      = f"http://{ESP32_IP}:{ESP32_PORT}/stt"
 WAKE_WORD  = os.environ.get('WAKE_WORD', 'Hi ESP')
 
+# Path config dashboard — dibaca setiap cek chime agar perubahan langsung berlaku
+HOME        = os.path.expanduser("~")
+CONFIG_FILE = os.path.join(HOME, "anggira", "dashboard_config.json")
+
+DEFAULT_CHIME = {
+    "chime_enabled": True,
+    "chime_text":    "jam berapa sekarang dan kapan hujan di cebongan salatiga",
+    "chime_hours":   list(range(6, 22)),
+}
+
+def load_chime_config() -> dict:
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE) as f:
+                c = json.load(f)
+            for k, v in DEFAULT_CHIME.items():
+                c.setdefault(k, v)
+            return c
+        except Exception as e:
+            logger_chime.warning("Gagal baca config: %s", e)
+    return DEFAULT_CHIME.copy()
+
 # Whitelist dari env — format: "123456789,987654321"
 _allowed_str = os.environ.get('TELEGRAM_ALLOWED_USER_ID', '')
 ALLOWED_CHAT_IDS: list[int] = (
@@ -55,7 +79,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     level=logging.INFO,
 )
-logger = logging.getLogger("WakeBot")
+logger       = logging.getLogger("WakeBot")
+logger_chime = logging.getLogger("Chime")
 
 
 # ── HTTP ke ESP32 ─────────────────────────────────────────────
@@ -302,6 +327,50 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
 
+# ── Chime ─────────────────────────────────────────────────────
+
+async def handle_chime():
+    """
+    Loop async — setiap 30 detik cek waktu.
+    Jika menit == 0 dan jam ada di chime_hours → wake + say ke ESP32.
+    Config dibaca ulang tiap cek sehingga perubahan dashboard langsung berlaku.
+    """
+    last_triggered_hour = -1
+    logger_chime.info("Chime loop aktif ✓")
+
+    while True:
+        try:
+            now  = datetime.now()
+            hour = now.hour
+            mnt  = now.minute
+
+            if mnt == 0 and hour != last_triggered_hour:
+                cfg = load_chime_config()
+
+                if cfg.get("chime_enabled") and hour in cfg.get("chime_hours", []):
+                    text = cfg.get("chime_text", DEFAULT_CHIME["chime_text"])
+                    logger_chime.info("Jam %02d:00 → '%s'", hour, text)
+
+                    loop = asyncio.get_event_loop()
+                    ok_wake = await loop.run_in_executor(None, send_wake_http)
+                    if ok_wake:
+                        await asyncio.sleep(2)
+                        ok_say = await loop.run_in_executor(None, send_say_http, text)
+                        logger_chime.info("Say %s", "OK ✓" if ok_say else "GAGAL ✗")
+                    else:
+                        logger_chime.warning("ESP32 tidak merespons wake, skip")
+                else:
+                    reason = "disabled" if not cfg.get("chime_enabled") else f"jam {hour} tidak aktif"
+                    logger_chime.debug("Jam %02d:00 — skip (%s)", hour, reason)
+
+                last_triggered_hour = hour
+
+        except Exception as e:
+            logger_chime.error("Chime loop error: %s", e)
+
+        await asyncio.sleep(30)
+
+
 # ── Main ──────────────────────────────────────────────────────
 
 def main():
@@ -326,9 +395,23 @@ def main():
 
     logger.info("Bot berjalan. Kirim 'Hi, ESP' dari Telegram.")
 
+    async def run_bot():
+        async with app:
+            await app.initialize()
+            await app.start()
+            await app.updater.start_polling(allowed_updates=["message"])
+            logger.info("Bot berjalan. Kirim 'Hi, ESP' dari Telegram.")
+            # Jalan terus sampai interrupt
+            try:
+                await asyncio.Event().wait()
+            finally:
+                await app.updater.stop()
+                await app.stop()
+                await app.shutdown()
+
     try:
-        app.run_polling(allowed_updates=["message"])
-    finally:
+        asyncio.run(asyncio.gather(run_bot(), handle_chime()))
+    except KeyboardInterrupt:
         logger.info("Bot dihentikan.")
 
 

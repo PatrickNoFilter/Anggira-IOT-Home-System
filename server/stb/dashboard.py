@@ -514,21 +514,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             log_path = LOG_PATHS.get(log_type, ANGGIRA_LOG)
             self.send_json({"log": read_log(log_path)})
 
-        elif path == "/api/chime_config":
-            # Dipanggil oleh ESP32 setiap jam untuk ambil chime config
-            hour_param = qs.get("hour", ["-1"])[0]
-            try:
-                current_hour = int(hour_param)
-            except ValueError:
-                current_hour = -1
-            cfg = load_config()
-            enabled   = cfg.get("chime_enabled", True)
-            hours     = cfg.get("chime_hours", list(range(6, 22)))
-            chime_text = cfg.get("chime_text", "jam berapa sekarang dan kapan hujan di cebongan salatiga")
-            # Kalau jam ini tidak ada di daftar aktif → return enabled=false
-            active = enabled and (current_hour in hours)
-            self.send_json({"enabled": active, "text": chime_text if active else "", "hours": hours})
-
         elif path == "/api/esp32_status":
             try:
                 import urllib.request as ur

@@ -5,7 +5,6 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 import threading
-import os
 
 # Import dari services.py
 from services import (
@@ -23,7 +22,7 @@ from services import (
     get_vatican_news,
     get_news_topik,
     set_reminder_v2, get_alarms, cancel_alarm,
-    start_scheduler,
+    start_scheduler
 )
 
 # ================= TELEGRAM BOT =================

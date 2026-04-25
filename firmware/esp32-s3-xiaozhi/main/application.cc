@@ -15,8 +15,8 @@
 #include <cJSON.h>
 #include <driver/gpio.h>
 #include <arpa/inet.h>
-#include <utility>
 #include <time.h>
+#include <utility>
 
 #define TAG "Application"
 
@@ -36,11 +36,6 @@ static const char *const STATE_STRINGS[] = {
 
 Application::Application()
 {
-    // Set timezone ke WIB (UTC+7) — DILAKUKAN SEBAGAI PERTAMA
-    // sebelum clock timer atau display apapun berjalan
-    setenv("TZ", kTimezoneWib, 1);
-    tzset();
-
     event_group_ = xEventGroupCreate();
 
 #if CONFIG_USE_DEVICE_AEC && CONFIG_USE_SERVER_AEC
@@ -568,6 +563,11 @@ void Application::Start()
     });
     WakeServer::GetInstance().Start();
 
+    // Set timezone ke WIB (UTC+7) agar localtime_r akurat
+    setenv("TZ", "WIB-7", 1);
+    tzset();
+    ESP_LOGI(TAG, "Timezone set to WIB (UTC+7)");
+
     has_server_time_ = ota.HasServerTime();
     if (protocol_started)
     {
@@ -1008,7 +1008,6 @@ void Application::SendTextToAI(const std::string& text)
     if (device_state_ == kDeviceStateSpeaking) {
         ESP_LOGI(TAG, "SendTextToAI: aborting current speech, will retry...");
         AbortSpeaking(kAbortReasonNone);
-        // Retry setelah abort selesai (polling state via timer)
         Schedule([this, text]() {
             SendTextToAIWithRetry(text, 0);
         });
@@ -1025,7 +1024,7 @@ void Application::SendTextToAI(const std::string& text)
         return;
     }
 
-    // Jika tidak idle (connecting, upgrading, dll) → retry saja
+    // Jika tidak idle (connecting, upgrading, dll) → retry
     if (device_state_ != kDeviceStateIdle) {
         ESP_LOGW(TAG, "SendTextToAI: not idle (state=%d), retrying...", device_state_);
         Schedule([this, text]() {
@@ -1049,14 +1048,13 @@ void Application::SendTextToAIWithRetry(const std::string& text, int attempt)
     }
 
     if (device_state_ != kDeviceStateIdle) {
-        // Jadwalkan ulang setelah RETRY_MS
         esp_timer_handle_t timer;
         esp_timer_create_args_t args = {
             .callback = [](void* arg) {
-                auto* pair = static_cast<std::pair<Application*, std::pair<std::string, int>>*>(arg);
-                pair->first->Schedule([pair]() {
-                    pair->first->SendTextToAIWithRetry(pair->second.first, pair->second.second);
-                    delete pair;
+                auto* p = static_cast<std::pair<Application*, std::pair<std::string, int>>*>(arg);
+                p->first->Schedule([p]() {
+                    p->first->SendTextToAIWithRetry(p->second.first, p->second.second);
+                    delete p;
                 });
             },
             .arg = new std::pair<Application*, std::pair<std::string, int>>(
@@ -1065,7 +1063,7 @@ void Application::SendTextToAIWithRetry(const std::string& text, int attempt)
             .name = "say_retry"
         };
         esp_timer_create(&args, &timer);
-        esp_timer_start_once(timer, RETRY_MS * 1000);  // microseconds
+        esp_timer_start_once(timer, RETRY_MS * 1000);
         return;
     }
 
@@ -1075,21 +1073,24 @@ void Application::SendTextToAIWithRetry(const std::string& text, int attempt)
 
 void Application::SendTextToAIImmediate(const std::string& text)
 {
-    // ✅ LANGSUNG KIRIM — TANPA cek state, tanpa wake, tanpa popup sound
-    // Tidak butuh buka audio channel — biar server kirim TTS aja
-    // Audio akan otomatis aktif pas TTS datang
-
-    // 🔧 HILANGKAN SEMUA pengecekan state dan buka channel
-    // 🔧 HILANGKAN bunyi P3_POPUP biar hening saat chime
-
-    // Set state idle, kirim langsung ke AI
-    SetDeviceState(kDeviceStateIdle);
-
-    // Kirim sebagai wake word detected dengan teks user langsung
-    // Server akan proses pesan user tanpa menunggu audio
-    if (protocol_) {
-        protocol_->SendWakeWordDetected(text);
+    // Buka audio channel jika belum terbuka
+    if (!protocol_->IsAudioChannelOpened()) {
+        SetDeviceState(kDeviceStateConnecting);
+        if (!protocol_->OpenAudioChannel()) {
+            ESP_LOGE(TAG, "SendTextToAIImmediate: Failed to open audio channel");
+            SetDeviceState(kDeviceStateIdle);
+            return;
+        }
     }
 
-    ESP_LOGI(TAG, "SendTextToAIImmediate: DIRECT SENT — %s", text.c_str());
+    // Bunyi popup seperti wake word fisik agar codec audio aktif
+    audio_service_.PlaySound(Lang::Sounds::P3_POPUP);
+
+    // Set state listening agar TTS response bisa diputar
+    SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+
+    // Kirim teks sebagai STT result — server AI akan langsung proses tanpa tunggu audio
+    protocol_->SendWakeWordDetected(text);
+
+    ESP_LOGI(TAG, "SendTextToAIImmediate: sent, waiting for TTS response");
 }

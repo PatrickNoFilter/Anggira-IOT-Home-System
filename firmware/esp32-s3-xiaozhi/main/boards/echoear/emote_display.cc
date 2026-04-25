@@ -65,7 +65,7 @@ static void clock_tm_callback(void* user_data)
         struct tm timeinfo;
         time(&now);
 
-        setenv("TZ", "GMT+0", 1);
+        setenv("TZ", "WIB-7", 1);
         tzset();
         localtime_r(&now, &timeinfo);
 

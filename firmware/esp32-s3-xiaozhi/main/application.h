@@ -32,9 +32,6 @@ enum AecMode {
 
 class Application {
 public:
-    static constexpr const char* kTimezoneWib = "WIB-7";
-    static constexpr int kTimezoneWibOffsetHours = 7;
-
     static Application& GetInstance() {
         static Application instance;
         return instance;
@@ -98,4 +95,3 @@ private:
 };
 
 #endif // _APPLICATION_H_
-
