@@ -451,7 +451,13 @@ void Application::Start()
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage("system", "");
-            SetDeviceState(kDeviceStateIdle);
+            if (device_state_ == kDeviceStateSpeaking) {
+                ESP_LOGI(TAG, "Audio channel closed while speaking, keeping current state");
+            } else {
+                ESP_LOGI(TAG, "Audio channel closed while in state %s, switching to idle",
+                         STATE_STRINGS[device_state_]);
+                SetDeviceState(kDeviceStateIdle);
+            }
         }); });
     protocol_->OnIncomingJson([this, display](const cJSON *root)
                               {
