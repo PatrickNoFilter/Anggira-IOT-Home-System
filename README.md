@@ -43,6 +43,9 @@ anggira-iot/
 - 🌡️ **Sensor Rumah** — suhu, kelembaban, tekanan udara (AHT20 + BMP280)
 - 📱 **Telegram Bot** — kontrol semua fitur dari HP
 - 🖥️ **Web Dashboard** — monitor log semua service
+- 💬 **Quotes Per Jam** — quotes motivasi Bahasa Indonesia yang muncul setiap jam +1 menit
+- 🕐 **Chime Per Jam** — pengumuman otomatis setiap jam dengan teks kustom
+- 🎵 **Playlist Management** — kelola playlist musik via dashboard
 
 ---
 
@@ -90,6 +93,43 @@ Lihat [`firmware/esp32-s3-xiaozhi/README.md`](firmware/esp32-s3-xiaozhi/README.m
 |---|---|---|
 | Music Server | 8080 | `http://STB_IP:8080` |
 | Web Dashboard | 8088 | `http://STB_IP:8088` |
+
+---
+
+## 🖥️ Web Dashboard Features
+
+Dashboard web tersedia di `http://STB_IP:8088` dengan fitur:
+
+### 📋 Logs
+- Monitor live logs dari semua service (anggira.py, stream_server.py, bot.py)
+- Auto-refresh setiap 2 detik
+- Clear logs per service
+
+### 🕐 Chime
+- Aktifkan/nonaktifkan chime per jam
+- Set teks perintah yang diucapkan setiap jam
+- Pilih jam aktif (06:00-21:00 default)
+
+### 💬 Quotes
+- Kelola daftar quotes motivasi Bahasa Indonesia
+- Tambah/hapus quotes custom
+- Set jam aktif untuk quotes
+- Reset ke daftar default (25 quotes)
+- Quotes muncul setiap jam +1 menit
+
+### 🔑 Tokens
+- Kelola API keys dan tokens (Telegram, OpenRouter, OpenWeather, Google)
+- Simpan langsung ke ~/.bashrc
+
+### 🎵 Playlist
+- Kelola playlist musik
+- Tambah/edit/hapus playlist
+- Test play langsung dari dashboard
+
+### 📡 ESP32 Control
+- Kirim perintah langsung ke Xiaozhi
+- Aksi cepat (Test Chime, Lampu ON/OFF, Sensor, Cuaca)
+- Cek status ESP32 real-time
 
 ## 📡 Endpoints ESP32-C3
 
