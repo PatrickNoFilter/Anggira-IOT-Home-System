@@ -18,6 +18,7 @@ google_token.json
 *.token.json
 .env
 .env.local
+.bashrc
 .bashrc_local
 secrets.py
 config_local.py

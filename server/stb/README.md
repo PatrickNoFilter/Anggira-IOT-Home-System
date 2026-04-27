@@ -19,9 +19,44 @@ Server utama yang berjalan di STB Android menggunakan **Termux**. Berisi semua l
 
 ## 🔧 Instalasi (Termux)
 
+### 1. Install System Dependencies
 ```bash
+pkg update
 pkg install python ffmpeg
+```
+
+### 2. Install Python Packages
+```bash
 pip install python-telegram-bot websockets flask yt-dlp requests
+```
+
+### 3. Detailed Dependencies by File
+
+**anggira.py:**
+- `websockets` ← WebSocket server untuk MCP
+- Built-in: `asyncio`, `json`, `urllib`, `datetime`, `threading`
+
+**services.py:**
+- All built-in modules ✓
+- `asyncio`, `json`, `urllib`, `datetime`, `os`, `subprocess`, `re`, `logging`, `concurrent.futures`
+
+**bot.py:**
+- `python-telegram-bot` ← Telegram bot library
+- Built-in: `asyncio`, `json`, `logging`, `os`, `random`, `time`, `urllib`, `datetime`
+
+**stream_server.py:**
+- `flask` ← Web server untuk streaming musik
+- `yt-dlp` ← YouTube downloader
+- `requests` ← HTTP requests
+- Built-in: `subprocess`, `urllib.parse`, `logging`, `threading`
+
+### 4. Verify Installation
+```bash
+python -c "import websockets; print('websockets OK')"
+python -c "import telegram; print('python-telegram-bot OK')"
+python -c "import flask; print('flask OK')"
+python -c "import yt_dlp; print('yt-dlp OK')"
+python -c "import requests; print('requests OK')"
 ```
 
 ---
