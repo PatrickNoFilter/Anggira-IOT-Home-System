@@ -395,7 +395,7 @@ async def handle_quotes():
             hour = now.hour
             mnt  = now.minute
 
-            if mnt == 1 and hour != last_triggered_hour:
+            if mnt == 11 and hour != last_triggered_hour:
                 cfg = load_chime_config()
 
                 if cfg.get("quotes_enabled") and hour in cfg.get("quotes_hours", []):

@@ -22,7 +22,12 @@ from services import (
     get_vatican_news,
     get_news_topik,
     set_reminder_v2, get_alarms, cancel_alarm,
-    start_scheduler
+    start_scheduler,
+    play_playlist_stb, play_playlist_stb_http,
+    playlist_next, playlist_next_http,
+    playlist_stop, playlist_stop_http,
+    playlist_status, playlist_status_http,
+    list_playlists, list_playlists_http,
 )
 
 # ================= TELEGRAM BOT =================
@@ -155,8 +160,116 @@ async def handle_telegram_stb():
                     if text == "/radiolist":
                         telegram_send(TELEGRAM_STB_TOKEN, chat_id, list_radio_stations())
                         continue
-                    await loop.run_in_executor(executor, telegram_typing, TELEGRAM_STB_TOKEN, chat_id)
-                    await loop.run_in_executor(executor, _handle_stb_message, chat_id, text)
+                    if text.startswith("/playlist "):
+                        parts = text[10:].strip().split()
+                        pname = parts[0] if parts else ""
+                        shuf = len(parts) > 1 and parts[1].lower() in ("shuffle", "acak")
+                        msg = play_playlist_stb_http(pname, shuf)
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, msg)
+                        continue
+                    if text in ["/playlistnext", "/pnext"]:
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, playlist_next_http())
+                        continue
+                    if text in ["/playliststop", "/pstop"]:
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, playlist_stop_http())
+                        tts_stb("Playlist dihentikan.")
+                        continue
+                    if text in ["/playliststatus", "/pstatus"]:
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, playlist_status_http())
+                        continue
+                    if text in ["/playlists", "/listplaylist"]:
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, list_playlists_http())
+                        continue
+
+                    # ── Keyword detection (bahasa natural) ──────────
+                    tl = text.lower()
+
+                    # Stop musik
+                    if any(k in tl for k in ["stop musik", "hentikan musik", "matikan musik", "stop lagu", "hentikan lagu"]):
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, stop_song_stb_http())
+                        tts_stb("Musik dihentikan.")
+                        continue
+
+                    # Stop radio
+                    if any(k in tl for k in ["stop radio", "hentikan radio", "matikan radio", "radio stop", "radio off"]):
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, stop_radio_stb_http())
+                        tts_stb("Radio dihentikan.")
+                        continue
+
+                    # Stop playlist
+                    if any(k in tl for k in ["stop playlist", "hentikan playlist", "matikan playlist"]):
+                        msg = playlist_stop_http()
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, msg)
+                        tts_stb("Playlist dihentikan.")
+                        continue
+
+                    # Skip lagu
+                    if any(k in tl for k in ["skip", "lagu berikutnya", "next lagu", "lanjut lagu"]):
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, playlist_next_http())
+                        continue
+
+                    # Status playlist
+                    if any(k in tl for k in ["status playlist", "lagu apa", "sedang diputar", "playlist status"]):
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, playlist_status_http())
+                        continue
+
+                    # List playlist
+                    if any(k in tl for k in ["daftar playlist", "list playlist", "playlist apa saja", "ada playlist apa"]):
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, list_playlists_http())
+                        continue
+
+                    # List radio
+                    if any(k in tl for k in ["daftar radio", "list radio", "radio apa saja", "ada radio apa"]):
+                        telegram_send(TELEGRAM_STB_TOKEN, chat_id, list_radio_stations())
+                        continue
+
+                    # Putar radio STB
+                    for rk in ["putar radio ", "play radio ", "radio "]:
+                        if rk in tl:
+                            idx = tl.index(rk) + len(rk)
+                            station = text[idx:].strip().split()[0] if text[idx:].strip() else ""
+                            if station:
+                                msg = play_radio_stb_http(station)
+                                telegram_send(TELEGRAM_STB_TOKEN, chat_id, msg)
+                                tts_stb(msg)
+                            break
+                    else:
+                        # Putar playlist STB
+                        matched_pl = None
+                        for pk in ["putar playlist ", "play playlist ", "playlist "]:
+                            if pk in tl:
+                                matched_pl = pk
+                                break
+                        if matched_pl:
+                            idx = tl.index(matched_pl) + len(matched_pl)
+                            parts2 = text[idx:].strip().split()
+                            pname2 = parts2[0] if parts2 else ""
+                            shuf2  = len(parts2) > 1 and parts2[1].lower() in ("shuffle", "acak")
+                            if pname2:
+                                msg = play_playlist_stb_http(pname2, shuf2)
+                                telegram_send(TELEGRAM_STB_TOKEN, chat_id, msg)
+                                tts_stb(msg)
+                        else:
+                            # Putar lagu STB
+                            matched_play = None
+                            for sk in ["putar ", "play ", "mainkan ", "nyalakan lagu "]:
+                                if tl.startswith(sk) or (" " + sk) in tl:
+                                    matched_play = sk
+                                    break
+                            if matched_play and "radio" not in tl and "playlist" not in tl:
+                                idx = tl.find(matched_play) + len(matched_play)
+                                query = text[idx:].strip()
+                                if query:
+                                    msg = play_song_stb_http(query)
+                                    telegram_send(TELEGRAM_STB_TOKEN, chat_id, msg)
+                                    tts_stb(msg)
+                            else:
+                                # Fallback ke AI
+                                await loop.run_in_executor(executor, telegram_typing, TELEGRAM_STB_TOKEN, chat_id)
+                                await loop.run_in_executor(executor, _handle_stb_message, chat_id, text)
+                        continue
+
+                    continue
         except urllib.error.HTTPError as e:
             if e.code == 409:
                 await asyncio.sleep(10)
@@ -214,17 +327,52 @@ async def handle_mcp():
                 ping_interval=20,
                 ping_timeout=10,
                 close_timeout=5,
+                additional_headers={
+                    "User-Agent": "AnggiraHome/1.0",
+                }
             ) as ws:
                 print("MCP: terhubung ✓")
                 retry_delay = 3  # reset setelah connect berhasil
+
+                # Kirim initialize request ke server (client-initiated handshake)
+                await ws.send(json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {}},
+                        "clientInfo": {"name": "anggira", "version": "1.0"}
+                    }
+                }))
+                print("MCP: initialize dikirim, menunggu respons...")
+
                 async for message in ws:
                     try:
                         data = json.loads(message)
                         method = data.get("method", "")
                         msg_id = data.get("id")
 
+                        # Log semua pesan masuk untuk debug
+                        print(f"MCP ← {method or "response"} id={msg_id}")
+
+                        # Respons dari server atas initialize yang kita kirim (id=1)
+                        if "result" in data and not method and msg_id == 1:
+                            print(f"MCP: initialize OK — {data.get("result", {})}")
+                            await ws.send(json.dumps({
+                                "jsonrpc": "2.0",
+                                "method": "notifications/initialized",
+                                "params": {}
+                            }))
+                            print("MCP: siap menerima perintah ✓")
+                            continue
+
                         if method == "initialize":
                             await ws.send(json.dumps({"jsonrpc": "2.0", "id": msg_id, "result": {"protocolVersion": "2024-11-05"}}))
+
+                        # Abaikan notifications dari server
+                        elif method and method.startswith("notifications/"):
+                            pass
 
                         elif method == "tools/list":
                             await ws.send(json.dumps({
@@ -305,17 +453,16 @@ async def handle_mcp():
                             elif tool == "batal_pengingat": result = await cancel_alarm(args.get("keyword", ""))
                             elif tool == "play_playlist":
                                 name = args.get("name", "")
-                                shuf = "true" if args.get("shuffle") else "false"
-                                import urllib.parse as _up
-                                result = await _call_stream_server(f"/play_playlist?name={_up.quote(name)}&shuffle={shuf}")
+                                shuf = args.get("shuffle", False)
+                                result = await play_playlist_stb(name, shuf)
                             elif tool == "playlist_next":
-                                result = await _call_stream_server("/playlist_next")
+                                result = await playlist_next()
                             elif tool == "playlist_stop":
-                                result = await _call_stream_server("/playlist_stop")
+                                result = await playlist_stop()
                             elif tool == "playlist_status":
-                                result = await _call_stream_server("/playlist_status")
+                                result = await playlist_status()
                             elif tool == "list_playlists":
-                                result = await _call_stream_server("/api/playlists")
+                                result = await list_playlists()
                             else: result = "Tool tidak dikenal"
 
                             await ws.send(json.dumps({"jsonrpc": "2.0", "id": msg_id, "result": {"content": [{"type": "text", "text": str(result)}]}}))

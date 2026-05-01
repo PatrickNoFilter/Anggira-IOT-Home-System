@@ -40,6 +40,16 @@ Kamu juga bisa memutar internet radio:
 Gunakan play_radio_stb / stop_radio_stb jika user menyebut: STB, TV, ruangan, speaker besar.
 Gunakan play_radio / stop_radio jika user tidak menyebut tempat.
 
+Kamu juga bisa memutar playlist musik di STB/TV:
+- play_playlist → putar playlist berdasarkan nama (contoh: santai, pagi, rohani). Opsional: shuffle=true untuk acak.
+- playlist_next → skip ke lagu berikutnya dalam playlist
+- playlist_stop → hentikan playlist yang sedang berjalan
+- playlist_status → cek lagu yang sedang diputar di playlist
+- list_playlists → tampilkan semua nama playlist yang tersedia
+
+Gunakan play_playlist jika user menyebut: playlist, putar semua, lagu-lagu, koleksi, atau menyebut nama playlist.
+Jika user tidak tahu nama playlist, gunakan list_playlists dulu.
+
 Jawab singkat, jelas, bahasa Indonesia natural."""
 
 executor = ThreadPoolExecutor(max_workers=4)
@@ -196,6 +206,96 @@ async def stop_radio_stb():
 
 async def get_radio_list():
     return list_radio_stations()
+
+# ================= PLAYLIST STB =================
+
+def _call_music_server(path: str) -> str:
+    """Panggil endpoint stream_server.py dan kembalikan respons teks."""
+    try:
+        url = f"{MUSIC_SERVER}{path}"
+        with urllib.request.urlopen(url, timeout=15) as r:
+            data = json.loads(r.read().decode())
+        if "error" in data:
+            return f"Error: {data['error']}"
+        if data.get("status") == "playing" and data.get("playlist"):
+            first = data.get("first", "")
+            return (
+                f"▶ Memutar playlist '{data['playlist']}' "
+                f"({data['total']} lagu"
+                + (f", shuffle" if data.get("shuffle") else "")
+                + f"). Lagu pertama: {first}"
+            )
+        if data.get("status") == "stopped":
+            return "⏹ Playlist dihentikan"
+        if data.get("status") == "skipped":
+            return "⏭ Lanjut ke lagu berikutnya"
+        if data.get("status") == "not_playing":
+            return "Tidak ada playlist yang sedang diputar"
+        # playlist_status response
+        if "playing" in data and "playlist" in data:
+            if not data["playing"]:
+                return "Tidak ada playlist aktif"
+            return (
+                f"▶ Playlist: {data['playlist']} | "
+                f"Lagu {data['current_index']}/{data['total']}: "
+                f"{data['current_song']}"
+                + (f" — {data['current_artist']}" if data.get("current_artist") else "")
+            )
+        # list_playlists response — dict of playlist names
+        if isinstance(data, dict):
+            names = list(data.keys())
+            if not names:
+                return "Belum ada playlist. Buat dulu di dashboard."
+            return "🎵 Playlist tersedia: " + ", ".join(names)
+        return json.dumps(data, ensure_ascii=False)
+    except urllib.error.HTTPError as e:
+        try:
+            err = json.loads(e.read().decode()).get("error", str(e))
+        except Exception:
+            err = str(e)
+        return f"Playlist error: {err}"
+    except Exception as e:
+        return f"Playlist error: {e}"
+
+
+def play_playlist_stb_http(name: str, shuffle: bool = False) -> str:
+    shuf = "true" if shuffle else "false"
+    return _call_music_server(
+        f"/play_playlist?name={urllib.parse.quote(name)}&shuffle={shuf}"
+    )
+
+def playlist_next_http() -> str:
+    return _call_music_server("/playlist_next")
+
+def playlist_stop_http() -> str:
+    return _call_music_server("/playlist_stop")
+
+def playlist_status_http() -> str:
+    return _call_music_server("/playlist_status")
+
+def list_playlists_http() -> str:
+    return _call_music_server("/api/playlists")
+
+
+async def play_playlist_stb(name: str, shuffle: bool = False):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, play_playlist_stb_http, name, shuffle)
+
+async def playlist_next():
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, playlist_next_http)
+
+async def playlist_stop():
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, playlist_stop_http)
+
+async def playlist_status():
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, playlist_status_http)
+
+async def list_playlists():
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, list_playlists_http)
 
 # ================= ESP32 =================
 def esp32_get(path):
